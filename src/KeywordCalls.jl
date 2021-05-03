@@ -6,6 +6,17 @@ using GeneralizedGenerated
 
 export kwcall, @kwcall
 
+const TypeLevel = GeneralizedGenerated.TypeLevel
+
+
+"""
+From @thautwarm
+
+we use this to avoid introduce static type parameters
+for generated functions
+"""
+_unwrap_type(a::Type{<:Type}) = a.parameters[1]
+
 """
     kwcallperm(f, keys::Tuple{Symbol})
 
@@ -35,19 +46,20 @@ Declares that any call `f(::NamedTuple{N})` with `sort(N) == (:a,:b,:d)`
 should be dispatched to the method already defined on `f(::NamedTuple{(:b,:a,:d)})`
 """
 macro kwcall(call)
-    esc(_kwcall(call))
+    esc(_kwcall(__module__, call))
 end
 
-function _kwcall(call)
+function _kwcall(m::Module, call)
     @match call begin
         :($f($(args...))) => begin
             π = invperm(sortperm(collect(args)))
             sargs = Tuple(sort(args))
             targs = Tuple(args)
+            M = to_type(m)
             quote
                 KeywordCalls.baseperm[($f, $sargs)] = $π
 
-                $f(nt::NamedTuple) = kwcall($f, nt)
+                $f(nt::NamedTuple) = kwcall($M, $f, nt)
 
                 $f(; kwargs...) = $f(kwargs.data)
 
@@ -63,24 +75,28 @@ end
 
 Dispatch to the permuted `f(::NamedTuple)` call declared using `@kwcall`
 """
-@gg function kwcall(::Type{F}, nt::NamedTuple{N}) where {F,N}
+@gg function kwcall(M::Type{<:TypeLevel}, ::Type{F}, nt::NamedTuple{N}) where {F,N}
     π = Tuple(kwcallperm(F, N))
     Nπ = Tuple((N[p] for p in π))
-    quote
-        v = values(nt)
-        valind(n) = @inbounds v[n]
-        $F(NamedTuple{$Nπ}(Tuple(valind.($π))))
+    @under_global from_type(_unwrap_type(M)) quote 
+        let M
+            v = values(nt)
+            valind(n) = @inbounds v[n]
+            $F(NamedTuple{$Nπ}(Tuple(valind.($π))))
+        end
     end
 end
 
-@gg function kwcall(::F, nt::NamedTuple{N}) where {F<:Function,N}
+@gg function kwcall(M::Type{<:TypeLevel}, ::F, nt::NamedTuple{N}) where {F<:Function,N}
     f = F.instance
     π = Tuple(kwcallperm(f, N))
     Nπ = Tuple((N[p] for p in π))
-    quote
-        v = values(nt)
-        valind(n) = @inbounds v[n]
-        $f(NamedTuple{$Nπ}(Tuple(valind.($π))))
+    @under_global from_type(_unwrap_type(M)) quote 
+        let M
+            v = values(nt)
+            valind(n) = @inbounds v[n]
+            $f(NamedTuple{$Nπ}(Tuple(valind.($π))))
+        end
     end
 end
 
